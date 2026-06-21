@@ -3,6 +3,8 @@
 #include "config.h"
 #include "pid_control.h"
 #include "sensors.h"
+#include "storage.h"
+#include "telemetry.h"
 #include <Arduino.h>
 
 // ─── Constants ────────────────────────────────────────────────────────────────
@@ -52,7 +54,9 @@ void tuning_start(double target_temp, bool tune_top) {
         ssr_set_output(&g_ctx.ssr_bot, 0.0);
     }
 
-    Serial.printf("[tune] started — target=%.1f top=%d\n", target_temp, tune_top);
+    char start_msg[48];
+    snprintf(start_msg, sizeof(start_msg), "target=%.1f top=%d", target_temp, (int)tune_top);
+    telemetry_event("TUNE_START", start_msg);
 }
 
 // ─── Abort ────────────────────────────────────────────────────────────────────
@@ -62,7 +66,7 @@ void tuning_abort(void) {
     ssr_all_off();
     g_ctx.heater_top_enabled = false;
     g_ctx.heater_bot_enabled = false;
-    Serial.println("[tune] aborted");
+    telemetry_event("TUNE", "aborted");
 }
 
 // ─── Query ────────────────────────────────────────────────────────────────────
@@ -80,21 +84,30 @@ bool tuning_is_done(void) {
 void tuning_apply_results(void) {
     if (g_tune.phase != TUNE_DONE) return;
 
+    char msg[64];
     if (g_tune.tuning_top) {
         pid_set_tunings(&g_ctx.pid_top,
                         g_tune.result_kp,
                         g_tune.result_ki,
                         g_tune.result_kd);
-        Serial.printf("[tune] applied to TOP — kp=%.3f ki=%.4f kd=%.3f\n",
-                      g_tune.result_kp, g_tune.result_ki, g_tune.result_kd);
+        g_settings.kp_top = g_tune.result_kp;
+        g_settings.ki_top = g_tune.result_ki;
+        g_settings.kd_top = g_tune.result_kd;
+        snprintf(msg, sizeof(msg), "TOP kp=%.3f ki=%.4f kd=%.3f",
+                 g_tune.result_kp, g_tune.result_ki, g_tune.result_kd);
     } else {
         pid_set_tunings(&g_ctx.pid_bot,
                         g_tune.result_kp,
                         g_tune.result_ki,
                         g_tune.result_kd);
-        Serial.printf("[tune] applied to BOT — kp=%.3f ki=%.4f kd=%.3f\n",
-                      g_tune.result_kp, g_tune.result_ki, g_tune.result_kd);
+        g_settings.kp_bot = g_tune.result_kp;
+        g_settings.ki_bot = g_tune.result_ki;
+        g_settings.kd_bot = g_tune.result_kd;
+        snprintf(msg, sizeof(msg), "BOT kp=%.3f ki=%.4f kd=%.3f",
+                 g_tune.result_kp, g_tune.result_ki, g_tune.result_kd);
     }
+    storage_save();
+    telemetry_event("TUNE_APPLY", msg);
 }
 
 // ─── Tick ─────────────────────────────────────────────────────────────────────
@@ -131,7 +144,7 @@ void tuning_tick(void) {
             g_tune.last_switch_ms = now;
             g_tune.peak           = pv;
             g_tune.trough         = pv;
-            Serial.println("[tune] settled → relay phase");
+            telemetry_event("TUNE", "settled -> relay phase");
         }
         break;
     }
@@ -156,8 +169,10 @@ void tuning_tick(void) {
                 double amp = (g_tune.peak - g_tune.trough) / 2.0;
                 g_tune.amplitude_sum += amp;
                 g_tune.amplitude_count++;
-                Serial.printf("[tune] cycle %d — half=%.0f ms amp=%.2f\n",
-                              g_tune.period_count, half_period, amp);
+                char msg[64];
+                snprintf(msg, sizeof(msg), "cycle %d half=%.0f ms amp=%.2f",
+                         g_tune.period_count, half_period, amp);
+                telemetry_event("TUNE", msg);
             }
 
             g_tune.peak   = pv;
@@ -206,9 +221,12 @@ void tuning_tick(void) {
             g_ctx.heater_top_enabled = false;
             g_ctx.heater_bot_enabled = false;
 
-            Serial.printf("[tune] done — Ku=%.3f Tu=%.0f ms\n", g_tune.Ku, g_tune.Tu);
-            Serial.printf("[tune] gains — kp=%.3f ki=%.4f kd=%.3f\n",
-                          g_tune.result_kp, g_tune.result_ki, g_tune.result_kd);
+            char done_msg[80];
+            snprintf(done_msg, sizeof(done_msg),
+                     "Ku=%.3f Tu=%.0f ms kp=%.3f ki=%.4f kd=%.3f",
+                     g_tune.Ku, g_tune.Tu,
+                     g_tune.result_kp, g_tune.result_ki, g_tune.result_kd);
+            telemetry_event("TUNE_DONE", done_msg);
         }
         break;
     }

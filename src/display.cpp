@@ -5,6 +5,8 @@
 #include "config.h"
 #include "pid_control.h"
 #include "tuning.h"
+#include "storage.h"
+#include "telemetry.h"
 
 // ─── Display Instance (ST7920 128x64 SW-SPI) ─────────────────────────────────
 static U8G2_ST7920_128X64_F_SW_SPI u8g2(
@@ -99,6 +101,11 @@ void display_init(void) {
 
     g_menu      = MENU_SPLASH;
     g_splash_ms = millis();
+
+    // Restore persisted preheat config and profile selection
+    g_preheat_cfg.target_temp = g_settings.preheat_target_temp;
+    g_preheat_cfg.duration_s  = g_settings.preheat_duration_s;
+    g_profile_sel             = g_settings.profile_sel;
 }
 
 // ─── Encoder Polling ──────────────────────────────────────────────────────────
@@ -538,6 +545,10 @@ static void handle_encoder(EncoderEvent ev) {
             }
         }
         if (ev == ENC_PRESS || ev == ENC_LONG_PRESS) {
+            // Persist updated preheat config
+            g_settings.preheat_target_temp = g_preheat_cfg.target_temp;
+            g_settings.preheat_duration_s  = g_preheat_cfg.duration_s;
+            storage_save();
             g_cursor = 0; g_scroll_top = 0; g_menu = MENU_PREHEAT;
         }
         break;
@@ -593,6 +604,8 @@ static void handle_encoder(EncoderEvent ev) {
         if (ev == ENC_CCW) { g_cursor--; menu_clamp(&g_cursor, &g_scroll_top, NUM_PROFILES); }
         if (ev == ENC_PRESS) {
             g_profile_sel = (uint8_t)g_cursor;
+            g_settings.profile_sel = g_profile_sel;
+            storage_save();
             g_cursor = 0; g_scroll_top = 0;
             g_menu = MENU_BGA;
         }

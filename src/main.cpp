@@ -5,6 +5,8 @@
 #include "pid_control.h"
 #include "enc_display.h"
 #include "tuning.h"
+#include "storage.h"
+#include "telemetry.h"
 
 // ─── Global Context ───────────────────────────────────────────────────────────
 SystemCtx g_ctx  = {};
@@ -65,14 +67,17 @@ static void system_init(void) {
     ssr_init();
     display_init();
 
-    // Init top heater PID
+    // Load persisted settings (PID gains, preheat config, profile selection)
+    storage_init();
+
+    // Init top heater PID with stored gains
     pid_init(&g_ctx.pid_top,
-             DEFAULT_KP_TOP, DEFAULT_KI_TOP, DEFAULT_KD_TOP,
+             g_settings.kp_top, g_settings.ki_top, g_settings.kd_top,
              PID_OUT_MIN, PID_OUT_MAX);
 
-    // Init bottom heater PID
+    // Init bottom heater PID with stored gains
     pid_init(&g_ctx.pid_bot,
-             DEFAULT_KP_BOT, DEFAULT_KI_BOT, DEFAULT_KD_BOT,
+             g_settings.kp_bot, g_settings.ki_bot, g_settings.kd_bot,
              PID_OUT_MIN, PID_OUT_MAX);
 
     g_ctx.state                = STATE_IDLE;
@@ -81,7 +86,7 @@ static void system_init(void) {
     g_ctx.heater_top_enabled   = false;
     g_ctx.heater_bot_enabled   = false;
 
-    Serial.println("[temper2040] init ok");
+    telemetry_event("BOOT", "temper2040 init ok");
 }
 
 // ─── Sensor Tick ─────────────────────────────────────────────────────────────
@@ -108,20 +113,16 @@ static void tick_sensors(uint32_t now) {
         enter_abort("TC fault during run");
     }
 
-    // Heater overheat warning — log to serial for now
+    // Heater overheat warnings
     if (g_ctx.sensors.heater_top_warn) {
-        Serial.println("[WARN] top heater internal TC over threshold");
+        telemetry_event("WARN", "top heater internal TC over threshold");
     }
     if (g_ctx.sensors.heater_bot_warn) {
-        Serial.println("[WARN] bottom heater internal TC over threshold");
+        telemetry_event("WARN", "bottom heater internal TC over threshold");
     }
 
-    // Debug output
-    Serial.printf("[sensors] zone=%.2f edge=%.2f htop=%.2f hbot=%.2f\n",
-                  g_ctx.sensors.zone_temp,
-                  g_ctx.sensors.edge_temp,
-                  g_ctx.sensors.heater_top,
-                  g_ctx.sensors.heater_bot);
+    // Structured 1-second telemetry line
+    telemetry_tick(now);
 }
 
 // ─── PID Tick ─────────────────────────────────────────────────────────────────
@@ -143,21 +144,11 @@ static void tick_pid(uint32_t now) {
     if (g_ctx.heater_top_enabled && g_ctx.pid_top.active) {
         pid_compute(&g_ctx.pid_top, g_ctx.sensors.zone_temp, dt_ms);
         ssr_set_output(&g_ctx.ssr_top, g_ctx.pid_top.output);
-
-        Serial.printf("[pid_top] sp=%.1f pv=%.2f out=%.0f ms\n",
-                      g_ctx.pid_top.setpoint,
-                      g_ctx.sensors.zone_temp,
-                      g_ctx.pid_top.output);
     }
 
     if (g_ctx.heater_bot_enabled && g_ctx.pid_bot.active) {
         pid_compute(&g_ctx.pid_bot, g_ctx.sensors.edge_temp, dt_ms);
         ssr_set_output(&g_ctx.ssr_bot, g_ctx.pid_bot.output);
-
-        Serial.printf("[pid_bot] sp=%.1f pv=%.2f out=%.0f ms\n",
-                      g_ctx.pid_bot.setpoint,
-                      g_ctx.sensors.edge_temp,
-                      g_ctx.pid_bot.output);
     }
 
     g_ctx.last_pid_compute_ms = now;
@@ -276,5 +267,5 @@ static void enter_abort(const char *reason) {
     pid_set_active(&g_ctx.pid_top, false);
     pid_set_active(&g_ctx.pid_bot, false);
     g_ctx.state = STATE_ABORT;
-    Serial.printf("[ABORT] %s\n", reason);
+    telemetry_event("ABORT", reason);
 }
